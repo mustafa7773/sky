@@ -110,6 +110,8 @@ button.primary:hover{opacity:0.9;}
 
 .map-shell{position:relative;border-radius:12px;overflow:hidden;border:1px solid var(--line);height:460px;}
 #map{width:100%;height:100%;}
+.leaflet-container{background:#111 !important;}
+.leaflet-tile{outline:1px solid transparent;}
 
 .compass-dial-wrap{display:flex;justify-content:center;margin:22px 0 8px;}
 .compass-dial{width:220px;height:220px;}
@@ -141,12 +143,6 @@ footer{text-align:center;color:var(--muted);font-size:12.5px;padding:28px 0 0;}
   font-size:12.5px;padding:8px 14px;cursor:pointer;transition:background .15s,color .15s;
 }
 .layer-toggle button.active{background:var(--gold);color:#241705;font-weight:600;}
-
-.ghost{
-  background:transparent;color:var(--gold);border:1px solid var(--line);border-radius:10px;
-  padding:10px 18px;font-size:14px;font-family:inherit;cursor:pointer;transition:background .15s;
-}
-.ghost:hover{background:rgba(227,183,120,0.08);}
 
 @media(max-width:640px){
   .stat-grid{grid-template-columns:repeat(2,1fr);}
@@ -304,37 +300,211 @@ document.getElementById('clearBtn').addEventListener('click', e=>{
   e.preventDefault(); preview.classList.remove('show'); fileInput.value=''; ocrResultBox.classList.add('hidden');
 });
 
+// Oman spans UTM zones 39N/40N. Easting across the country runs roughly 150,000–900,000
+// (near zone edges), so the leading digit can be 1–8 (was wrongly restricted to 4–7 before).
+// Northing spans ~1,850,000 (Dhofar/Salalah, ~17°N) to ~2,950,000 (Musandam, ~26.4°N),
+// so the leading digit can be 1 or 2 (was wrongly restricted to only "2" before — this made
+// the tool silently fail on every point in southern Oman).
+const E_RE = '[1-8]\\d{5}\\.\\d{1,3}';
+const N_RE = '[12]\\d{6}\\.\\d{1,3}';
+const E_MIN=150000, E_MAX=900000, N_MIN=1500000, N_MAX=3000000;
+
+// Common OCR letter↔digit confusions (O/0, I·l/1, S/5, B/8, Z/2, G/6). Only applied to
+// tokens that are already mostly digits and long enough to be a coordinate, so ordinary
+// words (ZONE, PSD93, WGS84…) are left untouched.
+function fixOcrDigitConfusions(tok){
+  const digits = (tok.match(/[0-9]/g)||[]).length;
+  if(tok.length<5 || digits < tok.length*0.5) return tok;
+  return tok.replace(/[Oo]/g,'0').replace(/[IlL]/g,'1').replace(/[Ss]/g,'5')
+             .replace(/[Bb]/g,'8').replace(/[Zz]/g,'2').replace(/[Gg]/g,'6');
+}
+
 function tryAutoFillPoints(text){
-  const eastings = (text.match(/\b\d{6}\.\d{1,2}\b/g)||[]).map(Number).filter(n=>n>100000 && n<999999);
-  const northings = (text.match(/\b\d{7}\.\d{1,2}\b/g)||[]).map(Number).filter(n=>n>1000000 && n<9999999);
-  const count = Math.min(eastings.length, northings.length);
-  if(count>0){
-    const lines=[];
-    for(let i=0;i<count;i++) lines.push(eastings[i].toFixed(2)+', '+northings[i].toFixed(2));
-    document.getElementById('pointsInput').value = lines.join('\n');
+  // ── Step 0: per-line normalization ────────────────────────────────────────
+  // Everything below runs per line (never across a line break — the old version used
+  // \s, which also matches \n and could silently fuse the tail of one row's northing
+  // with the head of the next row's easting).
+  const lines = text.split('\n').map(rawLine=>{
+    let l = rawLine;
+    // Fix letter/digit confusions on numeric-looking tokens first (integer part
+    // AND its decimal tail together, e.g. "55O4O1.O5" → "550401.05").
+    l = l.replace(/[0-9OoIlLSsBbZzGg]+(?:\.[0-9OoIlLSsBbZzGg]+)?/g, fixOcrDigitConfusions);
+    // Thousands-separator commas inside a bigger number — handles chained groups
+    // like "2,470,252.97", not just a single comma: "555,601.65" → "555601.65"
+    l = l.replace(/\b\d{1,3}(?:,\d{3})+\b/g, m => m.replace(/,/g,''));
+    // Remaining comma used as a European decimal separator: "552408,65" → "552408.65"
+    l = l.replace(/\b(\d{5,7}),(\d{1,3})\b/g, '$1.$2');
+    // OCR inserts a stray space/tab inside a number: "552 408.95" or "552408 95"
+    l = l.replace(/\b(\d{3,7})[ \t]+(\d{3,6})\b/g, (m,a,b)=>{
+      const joined=a+b, n=parseInt(joined,10);
+      if(joined.length===8 && n>=E_MIN*100 && n<=E_MAX*100) return joined;
+      if(joined.length===9 && n>=N_MIN*100 && n<=N_MAX*100) return joined;
+      return m;
+    });
+    l = l.replace(/\b([1-8]\d{5})[ \t]+(\d{2})\b/g, '$1.$2');
+    l = l.replace(/\b([12]\d{6})[ \t]+(\d{2})\b/g, '$1.$2');
+    // Reconstruct a decimal point OCR dropped entirely: 8 digits → easting, 9 → northing
+    l = l.replace(/\b(\d{8,9})\b/g, (match)=>{
+      const len=match.length, n=parseInt(match,10);
+      if(len===9 && n>=N_MIN*100 && n<=N_MAX*100) return match.slice(0,7)+'.'+match.slice(7);
+      if(len===8 && n>=E_MIN*100 && n<=E_MAX*100)  return match.slice(0,6)+'.'+match.slice(6);
+      return match;
+    });
+    return l;
+  });
+  const normalized = lines.join('\n');
+
+  // ── Step 1: per-line scan (column-order independent) ───────────────────────
+  const rawPairs = [];
+  for(let i=0;i<lines.length;i++){
+    const row = lines[i];
+    const eM = row.match(new RegExp('\\b('+E_RE+')\\b'));
+    const nM = row.match(new RegExp('\\b('+N_RE+')\\b'));
+    if(eM && nM){
+      rawPairs.push([parseFloat(eM[1]), parseFloat(nM[1])]);
+    } else if(eM && !nM){
+      // Easting found but its Northing landed on the next line (common when OCR
+      // splits a wrapped table cell). Look one line ahead/behind for a lone Northing.
+      const neighbor = lines[i+1] || '';
+      const nNext = neighbor.match(new RegExp('\\b('+N_RE+')\\b'));
+      if(nNext && !neighbor.match(new RegExp('\\b('+E_RE+')\\b'))){
+        rawPairs.push([parseFloat(eM[1]), parseFloat(nNext[1])]);
+      }
+    }
   }
+
+  // ── Step 2: CENTROID fallback (if no polygon rows found) ───────────────────
+  if(rawPairs.length===0){
+    const cm = normalized.match(new RegExp('CENT(?:ER|RO)?I?D[:\\s,]+('+E_RE+')[,\\s]+('+N_RE+')','i'));
+    if(cm) rawPairs.push([parseFloat(cm[1]), parseFloat(cm[2])]);
+  }
+
+  // ── Step 3: full-text fallback (separate column scan, matched by order) ────
+  if(rawPairs.length===0){
+    const ee=[...normalized.matchAll(new RegExp('\\b('+E_RE+')\\b','g'))].map(m=>parseFloat(m[1]));
+    const nn=[...normalized.matchAll(new RegExp('\\b('+N_RE+')\\b','g'))].map(m=>parseFloat(m[1]));
+    const count=Math.min(ee.length,nn.length);
+    for(let i=0;i<count;i++) rawPairs.push([ee[i], nn[i]]);
+  }
+
+  // ── Step 4: range filter + de-duplicate (OCR often re-reads the same vertex) ──
+  const seen=new Set(), pairs=[];
+  for(const [e,n] of rawPairs){
+    if(e<=E_MIN || e>=E_MAX || n<=N_MIN || n>=N_MAX) continue;
+    const key = Math.round(e)+','+Math.round(n);
+    if(seen.has(key)) continue;
+    seen.add(key);
+    pairs.push(e.toFixed(2)+', '+n.toFixed(2));
+  }
+
+  if(pairs.length>0) document.getElementById('pointsInput').value = pairs.join('\n');
+
+  // ── Auto-detect datum & zone ───────────────────────────────────────────────
+  if(/WGS\s*84/i.test(text))            document.getElementById('datum').value='wgs84utm';
+  else if(/PSD\s*93|CLARK/i.test(text)) document.getElementById('datum').value='psd93';
+  const zoneM = text.match(/\b(\d{1,2})\s*N\b/i);
+  if(zoneM){ const z=parseInt(zoneM[1]); if(z>=1&&z<=60) document.getElementById('zone').value=z; }
+
+  return pairs.length>0;
 }
 
 function preprocessImage(dataUrl){
   return new Promise((resolve)=>{
     const img=new Image();
     img.onload=()=>{
-      const scale=2;
+      // ── 1. Scale up 3× for more detail ──────────────────────────────────────
+      const scale=3;
       const canvas=document.createElement('canvas');
       canvas.width=img.width*scale;
       canvas.height=img.height*scale;
       const ctx=canvas.getContext('2d');
       ctx.imageSmoothingEnabled=true;
+      ctx.imageSmoothingQuality='high';
       ctx.drawImage(img,0,0,canvas.width,canvas.height);
-      const imgData=ctx.getImageData(0,0,canvas.width,canvas.height);
-      const d=imgData.data;
-      for(let i=0;i<d.length;i+=4){
-        const gray=0.299*d[i]+0.587*d[i+1]+0.114*d[i+2];
-        const contrasted=Math.min(255, Math.max(0, (gray-128)*1.6+128));
-        d[i]=d[i+1]=d[i+2]=contrasted;
+
+      const W=canvas.width, H=canvas.height;
+      const raw=ctx.getImageData(0,0,W,H).data;
+
+      // ── 2. Luminance-weighted grayscale ─────────────────────────────────────
+      const gray=new Float32Array(W*H);
+      for(let i=0;i<W*H;i++)
+        gray[i]=0.299*raw[i*4]+0.587*raw[i*4+1]+0.114*raw[i*4+2];
+
+      // ── 3. Unsharp mask (sharpens edges before thresholding) ────────────────
+      // Gaussian blur ~radius 1 via two 1-D passes
+      const blurred=new Float32Array(W*H);
+      const k=[0.0625,0.25,0.375,0.25,0.0625]; // 1-D Gaussian kernel
+      const tmp=new Float32Array(W*H);
+      // Horizontal pass
+      for(let y=0;y<H;y++)
+        for(let x=0;x<W;x++){
+          let s=0;
+          for(let d=-2;d<=2;d++){const xx=Math.min(W-1,Math.max(0,x+d)); s+=k[d+2]*gray[y*W+xx];}
+          tmp[y*W+x]=s;
+        }
+      // Vertical pass
+      for(let y=0;y<H;y++)
+        for(let x=0;x<W;x++){
+          let s=0;
+          for(let d=-2;d<=2;d++){const yy=Math.min(H-1,Math.max(0,y+d)); s+=k[d+2]*tmp[yy*W+x];}
+          blurred[y*W+x]=s;
+        }
+      // Sharpen: original + amount*(original - blurred)
+      const sharp=new Float32Array(W*H);
+      const amount=1.5;
+      for(let i=0;i<W*H;i++) sharp[i]=Math.min(255,Math.max(0,gray[i]+amount*(gray[i]-blurred[i])));
+
+      // ── 4. Adaptive threshold via integral image (handles uneven lighting) ──
+      // Window = ~3 % of min dimension so it adapts to font size
+      let win=Math.round(Math.min(W,H)*0.03);
+      if(win%2===0) win++;              // must be odd
+      const half=win>>1;
+      const C=8;                        // constant: darker-than-mean by C → ink
+
+      // Build 2-D integral image (1-indexed, (W+1)×(H+1))
+      const integ=new Float64Array((W+1)*(H+1));
+      for(let y=1;y<=H;y++)
+        for(let x=1;x<=W;x++)
+          integ[y*(W+1)+x]=sharp[(y-1)*W+(x-1)]
+            +integ[(y-1)*(W+1)+x]+integ[y*(W+1)+(x-1)]
+            -integ[(y-1)*(W+1)+(x-1)];
+
+      // Threshold
+      const out=new Uint8ClampedArray(W*H*4);
+      for(let y=0;y<H;y++){
+        for(let x=0;x<W;x++){
+          const x1=Math.max(x-half,0), y1=Math.max(y-half,0);
+          const x2=Math.min(x+half,W-1), y2=Math.min(y+half,H-1);
+          const cnt=(x2-x1+1)*(y2-y1+1);
+          const sum=integ[(y2+1)*(W+1)+(x2+1)]
+            -integ[y1*(W+1)+(x2+1)]
+            -integ[(y2+1)*(W+1)+x1]
+            +integ[y1*(W+1)+x1];
+          const px=sharp[y*W+x]<(sum/cnt-C)?0:255; // 0=ink 255=paper
+          const idx=(y*W+x)*4;
+          out[idx]=out[idx+1]=out[idx+2]=px; out[idx+3]=255;
+        }
       }
-      ctx.putImageData(imgData,0,0);
-      resolve(canvas.toDataURL('image/png'));
+
+      // ── 5. Also keep a plain sharpened GRAYSCALE version (no hard threshold) ──
+      // Binarizing always loses some faint or thin digits; Tesseract does its own
+      // internal thresholding and often reads a soft grayscale image better than
+      // our hard black/white one. Keeping both lets us run OCR twice and merge
+      // the results, which is far more robust than relying on binarization alone.
+      const grayCanvas=document.createElement('canvas');
+      grayCanvas.width=W; grayCanvas.height=H;
+      const grayCtx=grayCanvas.getContext('2d');
+      const grayOut=new Uint8ClampedArray(W*H*4);
+      for(let i=0;i<W*H;i++){
+        const v=Math.min(255,Math.max(0,sharp[i]));
+        grayOut[i*4]=grayOut[i*4+1]=grayOut[i*4+2]=v; grayOut[i*4+3]=255;
+      }
+      grayCtx.putImageData(new ImageData(grayOut,W,H),0,0);
+
+      ctx.putImageData(new ImageData(out,W,H),0,0);
+      // Show the binarized image in preview so the user can confirm quality
+      document.getElementById('previewImg').src=canvas.toDataURL('image/png');
+      resolve({ binary: canvas.toDataURL('image/png'), gray: grayCanvas.toDataURL('image/png') });
     };
     img.src=dataUrl;
   });
@@ -350,15 +520,46 @@ async function handleFile(file){
     ocrStatus.classList.add('show');
     document.getElementById('ocrStatusText').textContent='جاري تحسين جودة الصورة…';
     try{
-      const processedDataUrl = await preprocessImage(reader.result);
-      document.getElementById('ocrStatusText').textContent='جاري قراءة الأرقام من الصورة… (قد يستغرق بضع ثوانٍ)';
-      const worker = await Tesseract.createWorker('eng');
-      await worker.setParameters({ tessedit_char_whitelist:'0123456789.' });
-      const { data:{ text } } = await worker.recognize(processedDataUrl);
+      const { binary, gray } = await preprocessImage(reader.result);
+      // workerBlobURL:false + an explicit workerPath makes the worker load straight
+      // from the CDN URL instead of being wrapped in a blob: URL first. Some hosting/
+      // preview environments (including Claude's own file-preview sandbox) block
+      // constructing Workers from blob: URLs via Content-Security-Policy, which made
+      // OCR fail silently before reaching the recognition step at all.
+      const worker = await Tesseract.createWorker('eng', 1, {
+        workerPath: 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.0/dist/worker.min.js',
+        workerBlobURL: false,
+      });
+
+      // Pass 1: binarized image, PSM 6 (uniform block) — best when the coordinates
+      // sit in a clean table.
+      document.getElementById('ocrStatusText').textContent='جاري قراءة الأرقام (المرحلة ١ من ٢)…';
+      await worker.setParameters({ tessedit_pageseg_mode: '6', preserve_interword_spaces: '1' });
+      const pass1 = await worker.recognize(binary);
+
+      // Pass 2: soft grayscale image, PSM 11 (sparse text) — better when the
+      // coordinates are scattered around the plot sketch rather than in a table,
+      // and recovers digits the hard threshold in pass 1 erased.
+      document.getElementById('ocrStatusText').textContent='جاري قراءة الأرقام (المرحلة ٢ من ٢)…';
+      await worker.setParameters({ tessedit_pageseg_mode: '11', preserve_interword_spaces: '1' });
+      const pass2 = await worker.recognize(gray);
+
       await worker.terminate();
-      document.getElementById('ocrText').value = text;
+
+      const text1 = pass1.data.text, text2 = pass2.data.text;
+      const combinedText = text1 + '\n' + text2;
+
+      // Try each pass on its own too, so the user's raw-text box shows whichever
+      // single pass actually found valid coordinates, while auto-fill uses the
+      // union of both (tryAutoFillPoints already de-duplicates matching points).
+      document.getElementById('ocrText').value = combinedText.trim();
       ocrResultBox.classList.remove('hidden');
-      tryAutoFillPoints(text);
+      const found = tryAutoFillPoints(combinedText);
+      if(!found){
+        // Nothing matched in the merged text — still worth trying each pass alone
+        // in case merging introduced a spurious line-boundary issue.
+        tryAutoFillPoints(text1) || tryAutoFillPoints(text2);
+      }
     }catch(err){
       document.getElementById('ocrText').value = 'تعذّرت القراءة الآلية: ' + (err.message||'خطأ غير معروف') + '\nيمكنك إدخال الأرقام يدوياً من الصورة أعلاه.';
       ocrResultBox.classList.remove('hidden');
@@ -549,8 +750,7 @@ function updateQibla(lat, lon){
 function parsePoints(){
   const raw = document.getElementById('pointsInput').value.trim();
   if(!raw) return [];
-  return raw.split('
-').map(line=>{
+  return raw.split('\n').map(line=>{
     let parts = line.split(',').map(s=>parseFloat(s.trim()));
     if(!(parts.length>=2 && !isNaN(parts[0]) && !isNaN(parts[1]))){
       parts = line.trim().split(/\s+/).map(Number);
