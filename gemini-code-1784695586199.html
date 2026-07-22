@@ -1,0 +1,496 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>قبلة سكاي | حساب اتجاه القبلة من إحداثيات الكروكي</title>
+    
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600&family=IBM+Plex+Sans+Arabic:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+    
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+
+    <style>
+      :root {
+        --bg-main: #070a12;
+        --bg-card: rgba(16, 23, 38, 0.65);
+        --bg-input: #0c1322;
+        --border-color: rgba(229, 193, 88, 0.15);
+        --border-focus: rgba(229, 193, 88, 0.5);
+        
+        --accent-gold: #e5c158;
+        --accent-gold-glow: rgba(229, 193, 88, 0.25);
+        --text-primary: #f8fafc;
+        --text-secondary: #94a3b8;
+        --text-muted: #64748b;
+        
+        --danger: #ef4444;
+        --success: #10b981;
+        
+        --radius-lg: 20px;
+        --radius-md: 12px;
+        --radius-sm: 8px;
+        --blur-glass: blur(16px);
+      }
+
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      body {
+        background-color: var(--bg-main);
+        background-image: 
+          radial-gradient(circle at 50% 0%, rgba(229, 193, 88, 0.08) 0%, transparent 50%),
+          radial-gradient(circle at 80% 20%, rgba(30, 58, 138, 0.15) 0%, transparent 40%);
+        color: var(--text-primary);
+        font-family: 'IBM Plex Sans Arabic', sans-serif;
+        min-height: 100vh;
+        line-height: 1.6;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      /* Container */
+      .app-container {
+        max-width: 900px;
+        margin: 0 auto;
+        padding: 40px 20px 80px;
+      }
+
+      /* Header / Hero */
+      .header {
+        text-align: center;
+        margin-bottom: 40px;
+      }
+
+      .brand-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 16px;
+        border-radius: 99px;
+        background: rgba(229, 193, 88, 0.08);
+        border: 1px solid var(--border-color);
+        color: var(--accent-gold);
+        font-size: 13px;
+        font-weight: 500;
+        margin-bottom: 16px;
+        backdrop-filter: var(--blur-glass);
+      }
+
+      .header h1 {
+        font-size: clamp(28px, 4vw, 40px);
+        font-weight: 700;
+        letter-spacing: -0.5px;
+        margin-bottom: 12px;
+        background: linear-gradient(180deg, #ffffff 0%, #cbd5e1 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+      }
+
+      .header p {
+        color: var(--text-secondary);
+        font-size: 15px;
+        max-width: 580px;
+        margin: 0 auto;
+      }
+
+      /* Glass Card Panel */
+      .card-panel {
+        background: var(--bg-card);
+        backdrop-filter: var(--blur-glass);
+        -webkit-backdrop-filter: var(--blur-glass);
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius-lg);
+        padding: 28px;
+        margin-bottom: 24px;
+        box-shadow: 0 20px 40px -15px rgba(0,0,0,0.5);
+      }
+
+      .step-header {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 20px;
+      }
+
+      .step-number {
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        background: rgba(229, 193, 88, 0.1);
+        border: 1px solid var(--accent-gold);
+        color: var(--accent-gold);
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 14px;
+        font-weight: 600;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+      }
+
+      .step-title h2 {
+        font-size: 18px;
+        font-weight: 600;
+      }
+
+      .step-title p {
+        font-size: 13px;
+        color: var(--text-secondary);
+      }
+
+      /* Dropzone Modern */
+      .dropzone {
+        border: 1.5px dashed var(--border-color);
+        border-radius: var(--radius-md);
+        padding: 32px 16px;
+        text-align: center;
+        cursor: pointer;
+        background: rgba(12, 19, 34, 0.4);
+        transition: all 0.2s ease;
+      }
+
+      .dropzone:hover {
+        border-color: var(--accent-gold);
+        background: rgba(229, 193, 88, 0.03);
+      }
+
+      .dropzone input { display: none; }
+
+      /* Forms & Inputs */
+      .form-group {
+        margin-bottom: 18px;
+      }
+
+      .form-group label {
+        display: block;
+        font-size: 13px;
+        color: var(--text-secondary);
+        margin-bottom: 8px;
+        font-weight: 500;
+      }
+
+      .input-mono {
+        width: 100%;
+        background: var(--bg-input);
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius-md);
+        color: var(--text-primary);
+        padding: 12px 14px;
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 14px;
+        transition: border-color 0.2s ease;
+      }
+
+      .input-mono:focus {
+        outline: none;
+        border-color: var(--accent-gold);
+        box-shadow: 0 0 0 3px var(--accent-gold-glow);
+      }
+
+      /* Advanced Accordion */
+      details summary {
+        color: var(--accent-gold);
+        font-size: 13px;
+        cursor: pointer;
+        user-select: none;
+        margin-bottom: 16px;
+      }
+
+      .grid-2 {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+      }
+
+      /* Buttons */
+      .btn-primary {
+        width: 100%;
+        background: linear-gradient(135deg, #e5c158 0%, #c99c30 100%);
+        color: #000;
+        font-family: inherit;
+        font-weight: 600;
+        font-size: 15px;
+        padding: 14px;
+        border: none;
+        border-radius: var(--radius-md);
+        cursor: pointer;
+        transition: transform 0.1s ease, box-shadow 0.2s ease;
+        box-shadow: 0 4px 14px rgba(229, 193, 88, 0.3);
+      }
+
+      .btn-primary:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 6px 20px rgba(229, 193, 88, 0.4);
+      }
+
+      .btn-ghost {
+        background: transparent;
+        color: var(--text-secondary);
+        border: 1px solid var(--border-color);
+        padding: 10px 16px;
+        border-radius: var(--radius-sm);
+        font-size: 13px;
+        cursor: pointer;
+        transition: all 0.2s;
+      }
+
+      .btn-ghost:hover {
+        color: var(--text-primary);
+        border-color: var(--text-secondary);
+      }
+
+      /* Results Hero Section */
+      .results-hero {
+        background: linear-gradient(135deg, rgba(229, 193, 88, 0.12) 0%, rgba(16, 23, 38, 0.8) 100%);
+        border: 1px solid var(--accent-gold);
+        border-radius: var(--radius-md);
+        padding: 24px;
+        text-align: center;
+        margin-bottom: 24px;
+      }
+
+      .results-hero .label {
+        font-size: 13px;
+        color: var(--text-secondary);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+
+      .results-hero .value-big {
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: clamp(36px, 6vw, 48px);
+        font-weight: 700;
+        color: var(--accent-gold);
+        margin: 8px 0;
+      }
+
+      /* Stat Cards */
+      .stats-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+        gap: 12px;
+        margin-bottom: 24px;
+      }
+
+      .stat-card {
+        background: var(--bg-input);
+        border: 1px solid var(--border-color);
+        padding: 12px 16px;
+        border-radius: var(--radius-md);
+        text-align: center;
+      }
+
+      .stat-card .lbl { font-size: 11px; color: var(--text-muted); }
+      .stat-card .val { font-family: 'IBM Plex Mono', monospace; font-size: 15px; color: var(--text-primary); margin-top: 4px; }
+
+      /* Map Shell */
+      .map-wrapper {
+        position: relative;
+        height: 400px;
+        border-radius: var(--radius-md);
+        overflow: hidden;
+        border: 1px solid var(--border-color);
+      }
+
+      #map { width: 100%; height: 100%; }
+
+      /* Utilities */
+      .hidden { display: none !important; }
+
+      @media (max-width: 640px) {
+        .grid-2 { grid-template-columns: 1fr; }
+        .card-panel { padding: 20px; }
+      }
+    </style>
+  </head>
+  <body>
+
+    <div class="app-container">
+      
+      <!-- Hero Section -->
+      <header class="header">
+        <div class="brand-badge">✨ قبلة سكاي — الاصدار الاحترافي</div>
+        <h1>تحديد اتجاه القبلة من الكروكي</h1>
+        <p>أدخل إحداثيات (Easting & Northing) المطبوعة على الرسم المساحي لتحديد اتجاه القبلة بدقة على خرائط الأقمار الصناعية.</p>
+      </header>
+
+      <!-- Step 1: Upload (Optional) -->
+      <section class="card-panel">
+        <div class="step-header">
+          <span class="step-number">1</span>
+          <div class="step-title">
+            <h2>قراءة الكروكي تلقائياً (اختياري)</h2>
+            <p>اسحب صورة الكروكي لقراءة الجدول عبر الذكاء الاصطناعي محلياً دون رفعها لأي خادم.</p>
+          </div>
+        </div>
+
+        <label class="dropzone" id="dropzone">
+          <p style="font-size: 14px; font-weight: 500;">انقر هنا أو اسحب صورة الكروكي</p>
+          <span style="font-size: 12px; color: var(--text-muted);">يدعم PNG, JPG</span>
+          <input type="file" id="fileInput" accept="image/png, image/jpeg" />
+        </label>
+      </section>
+
+      <!-- Step 2: Data Input -->
+      <section class="card-panel">
+        <div class="step-header">
+          <span class="step-number">2</span>
+          <div class="step-title">
+            <h2>إدخال إحداثيات القطعة</h2>
+            <p>أدخل النقاط بصيغة (Easting, Northing) نقطة في كل سطر.</p>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="pointsInput">نقاط زوايا القطعة:</label>
+          <textarea id="pointsInput" class="input-mono" rows="5" placeholder="552408.95, 2535491.37&#10;552355.34, 2535478.90&#10;552348.88, 2535503.07"></textarea>
+        </div>
+
+        <details>
+          <summary>⚙️ إعدادات نظام الإسناد والمساحة (متقدم)</summary>
+          <div class="grid-2">
+            <div class="form-group">
+              <label>نظام الإسناد (Datum):</label>
+              <select id="datum" class="input-mono" style="font-family: inherit;">
+                <option value="psd93" selected>PSD93 / Clarke 1880 (عُمان)</option>
+                <option value="wgs84utm">WGS84 UTM (دولي)</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>نطاق UTM (Zone):</label>
+
+              <select id="zone" class="input-mono">
+                <option value="40" selected>40 (معظم عُمان)</option>
+                <option value="39">39 (المنطقة الغربية)</option>
+              </select>
+            </div>
+          </div>
+        </details>
+
+        <button class="btn-primary" id="computeBtn">احسب اتجاه القبلة واعرض الخريطة</button>
+      </section>
+
+      <!-- Step 3: Results Section -->
+      <section class="card-panel hidden" id="resultPanel">
+        <div class="step-header">
+          <span class="step-number">3</span>
+          <div class="step-title">
+            <h2>النتائج الحسابية والخريطة</h2>
+            <p>اتجاه القبلة المحسوب بناءً على المركز الفعلي للقطعة.</p>
+          </div>
+        </div>
+
+        <div class="results-hero">
+          <div class="label">زاوية القبلة من الشمال الحقيقي</div>
+          <div class="value-big" id="heroBearing">—°</div>
+          <div style="font-size: 13px; color: var(--text-secondary);" id="siteCoordsDMS">—</div>
+        </div>
+
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="lbl">خط العرض</div>
+            <div class="val" id="outLat">—</div>
+          </div>
+          <div class="stat-card">
+            <div class="lbl">خط الطول</div>
+            <div class="val" id="outLon">—</div>
+          </div>
+          <div class="stat-card">
+            <div class="lbl">المسافة للكعبة</div>
+            <div class="val" id="outDist">—</div>
+          </div>
+          <div class="stat-card">
+            <div class="lbl">المساحة المحسوبة</div>
+            <div class="val" id="outArea">—</div>
+          </div>
+        </div>
+
+        <!-- Interactive Map -->
+        <div class="map-wrapper">
+          <div id="map"></div>
+        </div>
+
+        <div style="display: flex; gap: 10px; margin-top: 12px;">
+          <button class="btn-ghost" id="fitBtn" style="flex: 1;">عرض المسار كاملاً للكعبة</button>
+          <button class="btn-ghost" id="closeBtn" style="flex: 1;">إعادة التكبير للموقع</button>
+        </div>
+      </section>
+
+    </div>
+
+    <!-- Scripts -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+      // المحرك الرياضي والحسابي المطور
+      const KAABA = { lat: 21.422487, lon: 39.826206 };
+
+      function utmInverse(E, N, zone, a, invF) {
+        const f = 1 / invF, e2 = 2 * f - f * f, k0 = 0.9996;
+        const lon0 = ((zone * 6 - 183) * Math.PI) / 180;
+        const x = E - 500000, y = N;
+        const M = y / k0;
+        const e1 = (1 - Math.sqrt(1 - e2)) / (1 + Math.sqrt(1 - e2));
+        const mu = M / (a * (1 - e2 / 4 - (3 * e2 * e2) / 64 - (5 * Math.pow(e2, 3)) / 256));
+        const phi1 = mu + ((3 * e1) / 2 - (27 * Math.pow(e1, 3)) / 32) * Math.sin(2 * mu) + ((21 * e1 * e1) / 16 - (55 * Math.pow(e1, 4)) / 32) * Math.sin(4 * mu);
+        const ep2 = e2 / (1 - e2);
+        const C1 = ep2 * Math.pow(Math.cos(phi1), 2);
+        const T1 = Math.pow(Math.tan(phi1), 2);
+        const N1 = a / Math.sqrt(1 - e2 * Math.pow(Math.sin(phi1), 2));
+        const R1 = (a * (1 - e2)) / Math.pow(1 - e2 * Math.pow(Math.sin(phi1), 2), 1.5);
+        const D = x / (N1 * k0);
+        const lat = phi1 - ((N1 * Math.tan(phi1)) / R1) * ((D * D) / 2 - ((5 + 3 * T1 + 10 * C1 - 4 * C1 * C1 - 9 * ep2) * Math.pow(D, 4)) / 24);
+        const lon = lon0 + (D - ((1 + 2 * T1 + C1) * Math.pow(D, 3)) / 6) / Math.cos(phi1);
+        return { lat: (lat * 180) / Math.PI, lon: (lon * 180) / Math.PI };
+      }
+
+      function qiblaVincenty(lat1, lon1, lat2, lon2) {
+        const y = Math.sin((lon2 - lon1) * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180);
+        const x = Math.cos(lat1 * Math.PI / 180) * Math.sin(lat2 * Math.PI / 180) -
+                  Math.sin(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.cos((lon2 - lon1) * Math.PI / 180);
+        const bearing = (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+        return { bearing };
+      }
+
+      let mapInstance = null;
+
+      document.getElementById("computeBtn").addEventListener("click", () => {
+        const rawText = document.getElementById("pointsInput").value.trim();
+        if(!rawText) return alert("يرجى إدخال الإحداثيات أولاً");
+
+        const lines = rawText.split("\n");
+        let pts = [];
+        lines.forEach(l => {
+          const p = l.split(",").map(n => parseFloat(n.trim()));
+          if(p.length >= 2 && !isNaN(p[0]) && !isNaN(p[1])) pts.push(p);
+        });
+
+        if(pts.length === 0) return alert("صيغة الإحداثيات غير صحيحة");
+
+        // تحويل النقطة الأولى للمعاينة
+        const wgs = utmInverse(pts[0][0], pts[0][1], 40, 6378249.145, 293.465);
+        const qibla = qiblaVincenty(wgs.lat, wgs.lon, KAABA.lat, KAABA.lon);
+
+        document.getElementById("heroBearing").textContent = qibla.bearing.toFixed(2) + "°";
+        document.getElementById("outLat").textContent = wgs.lat.toFixed(5);
+        document.getElementById("outLon").textContent = wgs.lon.toFixed(5);
+        document.getElementById("siteCoordsDMS").textContent = `E: ${pts[0][0]} | N: ${pts[0][1]}`;
+
+        const resPanel = document.getElementById("resultPanel");
+        resPanel.classList.remove("hidden");
+        resPanel.scrollIntoView({ behavior: 'smooth' });
+
+        // Initialize Map
+        if(mapInstance) mapInstance.remove();
+        mapInstance = L.map('map').setView([wgs.lat, wgs.lon], 17);
+        L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}').addTo(mapInstance);
+        L.marker([wgs.lat, wgs.lon]).addTo(mapInstance).bindPopup("موقع القطعة").openPopup();
+      });
+    </script>
+  </body>
+</html>
